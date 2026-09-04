@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Input & Riwayat Penjualan Jamur - SIM Budidaya Jamur</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        body { background-color: #f4f6f9; }
+        .form-card { border: none; border-radius: 16px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08); }
+        .btn-submit { padding: 14px; font-size: 1.1rem; font-weight: 600; border-radius: 12px; }
+    </style>
+</head>
+<body class="py-4">
+
+<div class="container" style="max-width: 650px;">
+    <!-- Header -->
+    <div class="text-center mb-4">
+        <h4 class="fw-bold text-success mb-1">
+            <i class="bi bi-cart-check-fill me-2"></i>Sirkulasi Penjualan
+        </h4>
+        <p class="text-muted small">Desa Girinata - Pencatatan & Riwayat Transaksi Penjualan</p>
+    </div>
+
+    <!-- Card Form Input Penjualan Baru -->
+    <div class="card form-card p-3 p-md-4 mb-4">
+        <h5 class="fw-bold text-dark mb-3"><i class="bi bi-plus-circle text-success me-2"></i>Input Transaksi Penjualan</h5>
+        <form action="/api/process-penjualan" method="POST">
+            
+            <!-- Tanggal Jual -->
+            <div class="mb-3">
+                <label for="tanggal_jual" class="form-label fw-semibold">
+                    <i class="bi bi-calendar-date me-1 text-success"></i> Tanggal Penjualan
+                </label>
+                <input type="date" class="form-control form-control-lg" id="tanggal_jual" name="tanggal_jual" required>
+            </div>
+
+            <!-- Volume Terjual (Kg) -->
+            <div class="mb-3">
+                <label for="volume_kg" class="form-label fw-semibold">
+                    <i class="bi bi-box-seam me-1 text-success"></i> Volume Terjual (Kg)
+                </label>
+                <div class="input-group input-group-lg">
+                    <input type="number" step="0.01" min="0" class="form-control" id="volume_kg" name="volume_kg" placeholder="0.00" oninput="hitungTotal()" required>
+                    <span class="input-group-text bg-light">Kg</span>
+                </div>
+            </div>
+
+            <!-- Harga per Kg -->
+            <div class="mb-3">
+                <label for="harga_per_kg" class="form-label fw-semibold">
+                    <i class="bi bi-tag me-1 text-success"></i> Harga per Kg (Rp)
+                </label>
+                <div class="input-group input-group-lg">
+                    <span class="input-group-text bg-light">Rp</span>
+                    <input type="number" step="500" min="0" class="form-control" id="harga_per_kg" name="harga_per_kg" placeholder="15000" oninput="hitungTotal()" required>
+                </div>
+            </div>
+
+            <!-- Estimasi Total Pendapatan -->
+            <div class="mb-3 p-3 bg-light rounded-3 border">
+                <div class="text-muted small">Total Transaksi</div>
+                <h4 class="fw-bold text-success mb-0" id="total_transaksi">Rp 0</h4>
+            </div>
+
+            <!-- Nama Pembeli / Tengkulak -->
+            <div class="mb-4">
+                <label for="pembeli_tengkulak" class="form-label fw-semibold">
+                    <i class="bi bi-person-badge me-1 text-success"></i> Nama Pembeli / Tengkulak
+                </label>
+                <input type="text" class="form-control form-control-lg" id="pembeli_tengkulak" name="pembeli_tengkulak" placeholder="Contoh: Pak Haji Ahmad / Pasar Kramat" required>
+            </div>
+
+            <input type="hidden" name="id_user" value="1">
+
+            <button type="submit" class="btn btn-success btn-submit w-100 shadow-sm mb-2">
+                <i class="bi bi-save-fill me-2"></i> Simpan Transaksi Penjualan
+            </button>
+            
+            <a href="/" class="btn btn-outline-secondary w-100 py-2 border-0">
+                <i class="bi bi-arrow-left me-1"></i> Kembali ke Dashboard
+            </a>
+        </form>
+    </div>
+
+    <!-- Tabel Riwayat Penjualan -->
+    <div class="card form-card p-3 p-md-4">
+        <h5 class="fw-bold text-dark mb-3">
+            <i class="bi bi-receipt me-2 text-primary"></i>Riwayat Transaksi Penjualan
+        </h5>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle">
+                <thead class="table-light">
+                    <tr>
+                        <th>Tanggal</th>
+                        <th>Volume</th>
+                        <th>Total (Rp)</th>
+                        <th>Pembeli</th>
+                        <th class="text-center">Aksi</th>
+                    </tr>
+                </thead>
+                <tbody id="tabel-riwayat-penjualan">
+                    <tr>
+                        <td colspan="5" class="text-center text-muted">Memuat data riwayat penjualan...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal Pop-up Edit Data Penjualan -->
+<div class="modal fade" id="modalEditPenjualan" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content rounded-4 border-0">
+            <div class="modal-header bg-success text-white">
+                <h5 class="modal-title fw-bold">
+                    <i class="bi bi-pencil-square me-2"></i>Edit Transaksi Penjualan
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form action="/api/update-penjualan" method="POST">
+                <div class="modal-body p-4">
+                    <input type="hidden" id="edit_id_penjualan" name="id_penjualan">
+                    
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Tanggal Penjualan</label>
+                        <input type="date" class="form-control" id="edit_tanggal_jual" name="tanggal_jual" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Volume Terjual (Kg)</label>
+                        <input type="number" step="0.01" class="form-control" id="edit_volume_kg" name="volume_kg" oninput="hitungTotalEdit()" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Harga per Kg (Rp)</label>
+                        <input type="number" step="500" class="form-control" id="edit_harga_per_kg" name="harga_per_kg" oninput="hitungTotalEdit()" required>
+                    </div>
+
+                    <div class="mb-3 p-3 bg-light rounded-3 border">
+                        <div class="text-muted small">Total Transaksi (Edit)</div>
+                        <h5 class="fw-bold text-success mb-0" id="edit_total_transaksi">Rp 0</h5>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Nama Pembeli / Tengkulak</label>
+                        <input type="text" class="form-control" id="edit_pembeli_tengkulak" name="pembeli_tengkulak" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light border-0">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+                    <button type="submit" class="btn btn-success fw-bold">Simpan Perubahan</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    document.getElementById('tanggal_jual').value = new Date().toISOString().split('T')[0];
+
+    function hitungTotal() {
+        const vol = parseFloat(document.getElementById('volume_kg').value) || 0;
+        const harga = parseFloat(document.getElementById('harga_per_kg').value) || 0;
+        const total = vol * harga;
+        document.getElementById('total_transaksi').textContent = 'Rp ' + total.toLocaleString('id-ID');
+    }
+
+    function hitungTotalEdit() {
+        const vol = parseFloat(document.getElementById('edit_volume_kg').value) || 0;
+        const harga = parseFloat(document.getElementById('edit_harga_per_kg').value) || 0;
+        const total = vol * harga;
+        document.getElementById('edit_total_transaksi').textContent = 'Rp ' + total.toLocaleString('id-ID');
+    }
+
+    // Fungsi Memuat Semua Riwayat Penjualan
+    async function loadRiwayatPenjualan() {
+        const tbody = document.getElementById('tabel-riwayat-penjualan');
+        try {
+            const response = await fetch('/api/rekapitulasi/penjualan-semua');
+            if (!response.ok) {
+                throw new Error('HTTP Status: ' + response.status);
+            }
+            
+            const resData = await response.json();
+            tbody.innerHTML = '';
+
+            const listPenjualan = resData.data || [];
+
+            if (listPenjualan.length > 0) {
+                listPenjualan.forEach(item => {
+                    const vol = Number(item.volume_kg) || 0;
+                    const harga = Number(item.harga_per_kg) || 0;
+                    const total = Number(item.total_pendapatan) || (vol * harga);
+
+                    tbody.innerHTML += `
+                        <tr>
+                            <td>${item.tanggal_jual}</td>
+                            <td class="fw-bold text-dark">${vol} Kg</td>
+                            <td class="fw-bold text-success">Rp ${total.toLocaleString('id-ID')}</td>
+                            <td><span class="badge bg-secondary-subtle text-dark border">${item.pembeli_tengkulak || '-'}</span></td>
+                            <td class="text-center">
+                                <button class="btn btn-sm btn-outline-primary me-1" onclick="bukaModalEditPenjualan(${item.id_penjualan})">
+                                    <i class="bi bi-pencil"></i> Edit
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" onclick="hapusPenjualan(${item.id_penjualan})">
+                                    <i class="bi bi-trash"></i> Hapus
+                                </button>
+                            </td>
+                        </tr>
+                    `;
+                });
+            } else {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Belum ada riwayat transaksi penjualan.</td></tr>';
+            }
+        } catch (e) {
+            console.error("Detail Error Riwayat Penjualan:", e);
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger">Gagal memuat data riwayat.</td></tr>';
+        }
+    }
+
+    // Fungsi Membuka Modal Pop-up Edit Penjualan
+    async function bukaModalEditPenjualan(idPenjualan) {
+        try {
+            const res = await fetch('/api/penjualan/' + idPenjualan);
+            const resData = await res.json();
+            
+            if (resData.status === 'success') {
+                const item = resData.data;
+                document.getElementById('edit_id_penjualan').value = item.id_penjualan;
+                document.getElementById('edit_tanggal_jual').value = item.tanggal_jual;
+                document.getElementById('edit_volume_kg').value = item.volume_kg;
+                document.getElementById('edit_harga_per_kg').value = item.harga_per_kg;
+                document.getElementById('edit_pembeli_tengkulak').value = item.pembeli_tengkulak;
+                
+                hitungTotalEdit();
+
+                const modal = new bootstrap.Modal(document.getElementById('modalEditPenjualan'));
+                modal.show();
+            }
+        } catch (error) {
+            alert('Gagal mengambil detail data penjualan.');
+        }
+    }
+
+    // Fungsi Konfirmasi & Hapus Penjualan Aman (POST)
+    async function hapusPenjualan(idPenjualan) {
+        if (confirm("Apakah Anda yakin ingin menghapus data penjualan ini?")) {
+            try {
+                const response = await fetch('/api/delete-penjualan/' + idPenjualan, {
+                    method: 'POST'
+                });
+                const result = await response.json();
+                
+                if (result.status === 'success') {
+                    alert('Data penjualan berhasil dihapus!');
+                    loadRiwayatPenjualan();
+                } else {
+                    alert('Gagal menghapus data: ' + result.message);
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Terjadi kesalahan saat menghapus data.');
+            }
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', loadRiwayatPenjualan);
+</script>
+</body>
+</html>
