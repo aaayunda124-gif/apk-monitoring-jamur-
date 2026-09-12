@@ -1,8 +1,12 @@
 from flask import Flask, request, jsonify, render_template, send_file, g, session, redirect, url_for
-import mysql.connector
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import pandas as pd
 from datetime import datetime
 import io
+import os
+from functools import wraps
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # ReportLab untuk Pembuatan File PDF Laporan Resmi
 from reportlab.lib.pagesizes import letter
@@ -12,44 +16,117 @@ from reportlab.lib import colors
 
 app = Flask(__name__)
 
-import os
+# Key Rahasia untuk Enkripsi Session Login
+app.secret_key = os.environ.get('SECRET_KEY', 'secret_key_sim_jamur_girinata_2026')
 
-# Konfigurasi Database MySQL (Membaca Env Variable dari Render)
-db_config = {
-    'host': os.environ.get('DB_HOST', 'localhost'),
-    'user': os.environ.get('DB_USER', 'root'),
-    'password': os.environ.get('DB_PASSWORD', ''),
-    'database': os.environ.get('DB_NAME', 'db_budidaya_jamur'),
-    'port': int(os.environ.get('DB_PORT', 3306))
-}
+# String Koneksi PostgreSQL Supabase (Setel di Environment Variable atau Isikan Langsung URI Supabase Kamu)
+# Contoh format URI Supabase: postgresql://postgres.xxxx:PASSWORD@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres
+DATABASE_URL = os.environ.get('DATABASE_URL', 'postgresql://postgres:PASSWORD_SUPABASE_KAMU@db.PROJECT_REF_KAMU.supabase.co:5432/postgres')
 
 def get_db_connection():
-    return mysql.connector.connect(**db_config)
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 # ==========================================
-# 1. ROUTE TAMPILAN (FRONTEND ROUTER)
+# MIDDLEWARE & DECORATOR PEMBATAS AKSES
+# ==========================================
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'id_user' not in session:
+            return redirect(url_for('route_login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if session.get('peran') != 'admin':
+            return "<script>alert('Akses ditolak! Halaman ini khusus Admin/Perangkat Desa.'); window.location.href='/';</script>"
+        return f(*args, **kwargs)
+    return decorated_function
+
+# ==========================================
+# 1. ROUTE AUTENTIKASI (LOGIN & LOGOUT)
+# ==========================================
+@app.route('/login')
+def route_login():
+    if 'id_user' in session:
+        return redirect(url_for('route_dashboard'))
+    return render_template('login.html')
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    conn = None
+    cursor = None
+    try:
+        username = request.form.get('username')
+        password = request.form.get('password')
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM users WHERE username = %s", (username,))
+        user = cursor.fetchone()
+
+        if user:
+            # Verifikasi password
+            is_valid_pw = False
+            if user['password'].startswith('pbkdf2:sha256:') or user['password'].startswith('scrypt:'):
+                is_valid_pw = check_password_hash(user['password'], password)
+            else:
+                is_valid_pw = (user['password'] == password)
+
+            if is_valid_pw:
+                # DUDUKKAN SESSION SECARA TEGAS
+                session.clear()
+                session['id_user'] = user['id_user']
+                session['nama'] = user['nama']
+                session['username'] = user['username']
+                session['peran'] = user['peran']
+                return jsonify({"status": "success", "message": f"Selamat datang, {user['nama']}!"})
+
+        return jsonify({"status": "error", "message": "Username atau password salah!"}), 401
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+    finally:
+        if cursor: cursor.close()
+        if conn: conn.close()
+
+# ROUTE LOGOUT
+@app.route('/logout')
+def route_logout():
+    session.clear() # Menghapus seluruh session login
+    return redirect(url_for('route_login'))
+
+# ==========================================
+# 2. ROUTE TAMPILAN UTAMA (FRONTEND ROUTER)
 # ==========================================
 @app.route('/')
+@login_required
 def route_dashboard():
-    return render_template('dashboard.html')
+    return render_template('dashboard.html', user=session)
 
 @app.route('/input-panen')
+@login_required
 def route_input_panen():
-    return render_template('index.html')
+    return render_template('index.html', user=session)
 
 @app.route('/input-penjualan')
+@login_required
 def route_input_penjualan():
-    return render_template('penjualan.html')
+    return render_template('penjualan.html', user=session)
 
 # ==========================================
-# 2. ENDPOINT PROSES INPUT PANEN, EDIT & HAPUS
+# 3. ENDPOINT PROSES INPUT PANEN, EDIT & HAPUS
 # ==========================================
 @app.route('/api/process-panen', methods=['POST'])
+@login_required
 def process_panen():
     conn = None
     cursor = None
     try:
-        id_user = int(request.form.get('id_user', 1))
+        id_user = session['id_user']
         tanggal_panen = request.form.get('tanggal_panen')
         berat_kg = float(request.form.get('berat_kg', 0))
         kualitas_grade = request.form.get('kualitas_grade')
@@ -57,14 +134,6 @@ def process_panen():
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # Cek dan buat otomatis id_user jika belum ada (mencegah Foreign Key Error 1452)
-        cursor.execute("SELECT id_user FROM users WHERE id_user = %s", (id_user,))
-        if not cursor.fetchone():
-            cursor.execute("""
-                INSERT INTO users (id_user, nama, username, password, peran) 
-                VALUES (%s, 'Yuda', 'yuda_petani', 'password123', 'petani')
-            """, (id_user,))
 
         # Insert ke Tabel Hasil Panen
         query_panen = """
@@ -83,30 +152,26 @@ def process_panen():
             cursor.execute(query_baglog, (id_user, jumlah_baglog_rusak, tanggal_panen, keterangan))
 
         conn.commit()
-        return "<script>alert('Data panen harian berhasil disimpan!'); window.location.href='/input-panen';</script>"
+        return jsonify({"status": "success", "message": "Data panen harian berhasil disimpan!"})
 
     except Exception as e:
-        if conn:
-            conn.rollback()
-        return f"<script>alert('Gagal menyimpan data: {str(e)}'); window.location.href='/input-panen';</script>"
+        if conn: conn.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
-# API Mengambil Single Data Panen & Baglog Berdasarkan ID
 @app.route('/api/panen/<int:id_panen>', methods=['GET'])
+@login_required
 def get_panen_by_id(id_panen):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
     cursor.execute("SELECT * FROM hasil_panen WHERE id_panen = %s", (id_panen,))
     data = cursor.fetchone()
     
     if data:
         data['tanggal_panen'] = str(data['tanggal_panen'])
-        # Cek apakah ada catatan baglog rusak pada tanggal panen tersebut
-        cursor.execute("SELECT SUM(jumlah_baglog_rusak) as baglog_rusak FROM sirkulasi_baglog WHERE tanggal_masuk = %s", (data['tanggal_panen'],))
+        cursor.execute("SELECT SUM(jumlah_baglog_rusak) as baglog_rusak FROM sirkulasi_baglog WHERE tanggal_masuk::date = %s::date", (data['tanggal_panen'],))
         row_baglog = cursor.fetchone()
         data['jumlah_baglog_rusak'] = int(row_baglog['baglog_rusak'] or 0) if row_baglog else 0
         
@@ -118,8 +183,8 @@ def get_panen_by_id(id_panen):
     conn.close()
     return jsonify({"status": "error", "message": "Data tidak ditemukan"}), 404
 
-# API Memperbarui Data Panen & Baglog Rusak (Update SQL)
 @app.route('/api/update-panen', methods=['POST'])
+@login_required
 def update_panen():
     conn = None
     cursor = None
@@ -133,7 +198,6 @@ def update_panen():
         conn = get_db_connection()
         cursor = conn.cursor()
 
-        # Update Tabel Hasil Panen
         query_update_panen = """
             UPDATE hasil_panen 
             SET tanggal_panen = %s, berat_kg = %s, kualitas_grade = %s 
@@ -141,67 +205,58 @@ def update_panen():
         """
         cursor.execute(query_update_panen, (tanggal_panen, berat_kg, kualitas_grade, id_panen))
 
-        # Update/Insert Tabel Sirkulasi Baglog
-        cursor.execute("SELECT id_sirkulasi FROM sirkulasi_baglog WHERE tanggal_masuk = %s", (tanggal_panen,))
+        cursor.execute("SELECT id_baglog FROM sirkulasi_baglog WHERE tanggal_masuk::date = %s::date", (tanggal_panen,))
         row_sirkulasi = cursor.fetchone()
 
         if row_sirkulasi:
-            query_update_baglog = "UPDATE sirkulasi_baglog SET jumlah_baglog_rusak = %s WHERE id_sirkulasi = %s"
-            cursor.execute(query_update_baglog, (jumlah_baglog_rusak, row_sirkulasi[0]))
-        elif jumlah_baglog_rusak > 0:
-            query_insert_baglog = """
-                INSERT INTO sirkulasi_baglog (id_user, jumlah_baglog_produktif, jumlah_baglog_rusak, tanggal_masuk, keterangan) 
-                VALUES (1, 0, %s, %s, 'Pengurangan baglog rusak/afkir saat panen')
-            """
-            cursor.execute(query_insert_baglog, (jumlah_baglog_rusak, tanggal_panen))
+            query_update_baglog = "UPDATE sirkulasi_baglog SET jumlah_baglog_rusak = %s WHERE id_baglog = %s"
+            cursor.execute(query_update_baglog, (jumlah_baglog_rusak, row_sirkulasi['id_baglog']))
+        else:
+            if jumlah_baglog_rusak > 0:
+                query_insert_baglog = """
+                    INSERT INTO sirkulasi_baglog (id_user, jumlah_baglog_produktif, jumlah_baglog_rusak, tanggal_masuk, keterangan) 
+                    VALUES (%s, 0, %s, %s, 'Pengurangan baglog rusak/afkir saat panen')
+                """
+                cursor.execute(query_insert_baglog, (session['id_user'], jumlah_baglog_rusak, tanggal_panen))
 
         conn.commit()
-        return "<script>alert('Data hasil panen & sirkulasi baglog berhasil diperbarui!'); window.location.href='/input-panen';</script>"
+        return jsonify({"status": "success", "message": "Data hasil panen & sirkulasi baglog berhasil diperbarui!"})
 
     except Exception as e:
-        if conn:
-            conn.rollback()
-        return f"<script>alert('Gagal memperbarui data: {str(e)}'); window.location.href='/input-panen';</script>"
+        if conn: conn.rollback()
+        return jsonify({"status": "error", "message": str(e)}), 500
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
-# API Hapus Data Panen (Hanya Method POST demi Keamanan Data)
 @app.route('/api/delete-panen/<int:id_panen>', methods=['POST'])
+@login_required
 def delete_panen(id_panen):
     conn = None
     cursor = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        query_delete = "DELETE FROM hasil_panen WHERE id_panen = %s"
-        cursor.execute(query_delete, (id_panen,))
+        cursor.execute("DELETE FROM hasil_panen WHERE id_panen = %s", (id_panen,))
         conn.commit()
-
         return jsonify({"status": "success", "message": "Data panen berhasil dihapus"})
-
     except Exception as e:
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
 # ==========================================
-# 3. ENDPOINT PROSES INPUT PENJUALAN, EDIT & HAPUS
+# 4. ENDPOINT PENJUALAN
 # ==========================================
 @app.route('/api/process-penjualan', methods=['POST'])
+@login_required
 def process_penjualan():
     conn = None
     cursor = None
     try:
-        id_user = int(request.form.get('id_user', 1))
+        id_user = session['id_user']
         tanggal_jual = request.form.get('tanggal_jual')
         volume_kg = float(request.form.get('volume_kg', 0))
         harga_per_kg = float(request.form.get('harga_per_kg', 0))
@@ -209,39 +264,27 @@ def process_penjualan():
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # Cek dan pastikan user_id 1 terdaftar
-        cursor.execute("SELECT id_user FROM users WHERE id_user = %s", (id_user,))
-        if not cursor.fetchone():
-            cursor.execute("""
-                INSERT INTO users (id_user, nama, username, password, peran) 
-                VALUES (%s, 'Yuda', 'yuda_petani', 'password123', 'petani')
-            """, (id_user,))
 
         query_penjualan = """
             INSERT INTO penjualan (id_user, tanggal_jual, volume_kg, harga_per_kg, pembeli_tengkulak) 
             VALUES (%s, %s, %s, %s, %s)
         """
         cursor.execute(query_penjualan, (id_user, tanggal_jual, volume_kg, harga_per_kg, pembeli_tengkulak))
-
         conn.commit()
         return "<script>alert('Transaksi penjualan berhasil dicatat!'); window.location.href='/input-penjualan';</script>"
 
     except Exception as e:
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
         return f"<script>alert('Gagal menyimpan transaksi: {str(e)}'); window.location.href='/input-penjualan';</script>"
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
-# API Mengambil Single Data Penjualan Berdasarkan ID (Untuk Modal Edit)
 @app.route('/api/penjualan/<int:id_penjualan>', methods=['GET'])
+@login_required
 def get_penjualan_by_id(id_penjualan):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
     cursor.execute("SELECT * FROM penjualan WHERE id_penjualan = %s", (id_penjualan,))
     data = cursor.fetchone()
     cursor.close()
@@ -254,8 +297,8 @@ def get_penjualan_by_id(id_penjualan):
         return jsonify({"status": "success", "data": data})
     return jsonify({"status": "error", "message": "Data tidak ditemukan"}), 404
 
-# API Memperbarui Data Penjualan (UPDATE SQL)
 @app.route('/api/update-penjualan', methods=['POST'])
+@login_required
 def update_penjualan():
     conn = None
     cursor = None
@@ -280,45 +323,35 @@ def update_penjualan():
         return "<script>alert('Data penjualan berhasil diperbarui!'); window.location.href='/input-penjualan';</script>"
 
     except Exception as e:
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
         return f"<script>alert('Gagal memperbarui data: {str(e)}'); window.location.href='/input-penjualan';</script>"
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
-# API Hapus Data Penjualan (Hanya Method POST)
 @app.route('/api/delete-penjualan/<int:id_penjualan>', methods=['POST'])
+@login_required
 def delete_penjualan(id_penjualan):
     conn = None
     cursor = None
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
-        query_delete = "DELETE FROM penjualan WHERE id_penjualan = %s"
-        cursor.execute(query_delete, (id_penjualan,))
+        cursor.execute("DELETE FROM penjualan WHERE id_penjualan = %s", (id_penjualan,))
         conn.commit()
-
         return jsonify({"status": "success", "message": "Data penjualan berhasil dihapus"})
-
     except Exception as e:
-        if conn:
-            conn.rollback()
+        if conn: conn.rollback()
         return jsonify({"status": "error", "message": str(e)}), 500
     finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        if cursor: cursor.close()
+        if conn: conn.close()
 
-# Endpoint Khusus Mengambil SEMUA Riwayat Penjualan (Master Log)
 @app.route('/api/rekapitulasi/penjualan-semua', methods=['GET'])
+@login_required
 def get_semua_penjualan():
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
     
     query = """
         SELECT id_penjualan, tanggal_jual, volume_kg, harga_per_kg, (volume_kg * harga_per_kg) as total_pendapatan, pembeli_tengkulak 
@@ -340,36 +373,33 @@ def get_semua_penjualan():
     return jsonify({"status": "success", "data": data})
 
 # ==========================================
-# 4. ENDPOINT DASHBOARD MONITORING (LIVE DATA API)
+# 5. ENDPOINT DASHBOARD MONITORING
 # ==========================================
 @app.route('/api/dashboard-data', methods=['GET'])
+@login_required
 def get_dashboard_data():
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
 
-    # 1. Menghitung Total Baglog Produktif & Rusak
     cursor.execute("SELECT SUM(jumlah_baglog_produktif) as produktif, SUM(jumlah_baglog_rusak) as rusak FROM sirkulasi_baglog")
     baglog_stat = cursor.fetchone()
     
-    baglog_produktif = int(baglog_stat['produktif'] or 0)
-    baglog_rusak = int(baglog_stat['rusak'] or 0)
+    baglog_produktif = int(baglog_stat['produktif'] or 0) if baglog_stat else 0
+    baglog_rusak = int(baglog_stat['rusak'] or 0) if baglog_stat else 0
 
-    # 2. Menghitung Total Panen Hari Ini
     today_str = datetime.now().strftime('%Y-%m-%d')
     cursor.execute("SELECT SUM(berat_kg) as total FROM hasil_panen WHERE tanggal_panen = %s", (today_str,))
     panen_today_res = cursor.fetchone()
-    panen_today = panen_today_res['total'] if panen_today_res['total'] is not None else 0
+    panen_today = panen_today_res['total'] if panen_today_res and panen_today_res['total'] is not None else 0
 
-    # 3. Menghitung Total Panen Bulan Ini
     current_month = datetime.now().month
     current_year = datetime.now().year
-    cursor.execute("SELECT SUM(berat_kg) as total FROM hasil_panen WHERE MONTH(tanggal_panen) = %s AND YEAR(tanggal_panen) = %s", (current_month, current_year))
+    cursor.execute("SELECT SUM(berat_kg) as total FROM hasil_panen WHERE EXTRACT(MONTH FROM tanggal_panen) = %s AND EXTRACT(YEAR FROM tanggal_panen) = %s", (current_month, current_year))
     panen_month_res = cursor.fetchone()
-    panen_month = panen_month_res['total'] if panen_month_res['total'] is not None else 0
+    panen_month = panen_month_res['total'] if panen_month_res and panen_month_res['total'] is not None else 0
 
-    # 4. Mengambil Data Panen 7 Hari Terakhir untuk Line Chart
     cursor.execute("""
-        SELECT DATE_FORMAT(tanggal_panen, '%d %b') as label, SUM(berat_kg) as total 
+        SELECT TO_CHAR(tanggal_panen, 'DD Mon') as label, SUM(berat_kg) as total 
         FROM hasil_panen 
         GROUP BY tanggal_panen 
         ORDER BY tanggal_panen DESC LIMIT 7
@@ -401,16 +431,16 @@ def get_dashboard_data():
     })
 
 # ==========================================
-# 5. FUNGSI & ENDPOINT REKAPITULASI LAPORAN
+# 6. FUNGSI & ENDPOINT REKAPITULASI LAPORAN
 # ==========================================
 def hitung_rekap_bulanan(bulan, tahun):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
 
     query_panen = """
         SELECT id_panen, tanggal_panen, berat_kg, kualitas_grade 
         FROM hasil_panen 
-        WHERE MONTH(tanggal_panen) = %s AND YEAR(tanggal_panen) = %s
+        WHERE EXTRACT(MONTH FROM tanggal_panen) = %s AND EXTRACT(YEAR FROM tanggal_panen) = %s
         ORDER BY tanggal_panen ASC
     """
     cursor.execute(query_panen, (bulan, tahun))
@@ -423,7 +453,7 @@ def hitung_rekap_bulanan(bulan, tahun):
     query_penjualan = """
         SELECT id_penjualan, tanggal_jual, volume_kg, harga_per_kg, (volume_kg * harga_per_kg) AS total_pendapatan, pembeli_tengkulak 
         FROM penjualan 
-        WHERE MONTH(tanggal_jual) = %s AND YEAR(tanggal_jual) = %s
+        WHERE EXTRACT(MONTH FROM tanggal_jual) = %s AND EXTRACT(YEAR FROM tanggal_jual) = %s
         ORDER BY tanggal_jual ASC
     """
     cursor.execute(query_penjualan, (bulan, tahun))
@@ -459,6 +489,7 @@ def hitung_rekap_bulanan(bulan, tahun):
     }
 
 @app.route('/api/rekapitulasi', methods=['GET'])
+@login_required
 def get_rekapitulasi_json():
     bulan = int(request.args.get('bulan', datetime.now().month))
     tahun = int(request.args.get('tahun', datetime.now().year))
@@ -466,6 +497,7 @@ def get_rekapitulasi_json():
     return jsonify({"status": "success", "data": rekap})
 
 @app.route('/api/rekapitulasi/ekspor-excel', methods=['GET'])
+@login_required
 def ekspor_excel():
     bulan = int(request.args.get('bulan', datetime.now().month))
     tahun = int(request.args.get('tahun', datetime.now().year))
@@ -495,6 +527,7 @@ def ekspor_excel():
     )
 
 @app.route('/api/rekapitulasi/ekspor-pdf', methods=['GET'])
+@login_required
 def ekspor_pdf():
     bulan = int(request.args.get('bulan', datetime.now().month))
     tahun = int(request.args.get('tahun', datetime.now().year))
@@ -510,12 +543,10 @@ def ekspor_pdf():
     subtitle_style = ParagraphStyle('SubTitleStyle', parent=styles['Normal'], fontName='Helvetica', fontSize=10, alignment=1, spaceAfter=15)
     section_style = ParagraphStyle('SectionStyle', parent=styles['Heading2'], fontName='Helvetica-Bold', fontSize=11, spaceBefore=10, spaceAfter=6)
 
-    # Header Laporan
     elements.append(Paragraph("PEMERINTAH DESA GIRINATA", title_style))
     elements.append(Paragraph(f"LAPORAN REKAPITULASI PRODUKTIVITAS BUDIDAYA JAMUR - PERIODE {bulan:02d}/{tahun}", subtitle_style))
     elements.append(Spacer(1, 10))
 
-    # Ringkasan KPI
     ringkasan_data = [
         ["Indikator Kinerja Operasional", "Nilai / Capaian"],
         ["Total Volume Hasil Panen", f"{rekap['ringkasan']['total_volume_panen_kg']} Kg"],
@@ -538,7 +569,6 @@ def ekspor_pdf():
     elements.append(table_ringkasan)
     elements.append(Spacer(1, 15))
 
-    # Detail Penjualan
     elements.append(Paragraph("2. Rincian Sirkulasi Penjualan & Transaksi", section_style))
     penjualan_table_data = [["Tanggal Jual", "Volume (Kg)", "Harga/Kg (Rp)", "Total Transaksi (Rp)", "Pembeli/Tengkulak"]]
     

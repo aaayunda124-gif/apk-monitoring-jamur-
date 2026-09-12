@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login -   Budidaya Jamur Desa Girinata</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Bootstrap Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        body {
+            background: linear-gradient(135deg, #198754 0%, #0f5132 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .login-card {
+            border: none;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            width: 100%;
+            max-width: 420px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container p-3">
+    <div class="card login-card p-4 mx-auto bg-white">
+        <div class="text-center mb-4">
+            <div class="display-4 text-success mb-2">
+                <i class="bi bi-flower1"></i>
+            </div>
+            <h4 class="fw-bold text-dark mb-1">  Budidaya Jamur</h4>
+            <p class="text-muted small">Desa Girinata - Masuk Akun</p>
+        </div>
+
+        <form id="formLogin" onsubmit="prosesLogin(event)">
+            <div class="mb-3">
+                <label for="username" class="form-label fw-semibold">Username</label>
+                <div class="input-group">
+                    <span class="input-group-text bg-light"><i class="bi bi-person"></i></span>
+                    <input type="text" class="form-control" id="username" name="username" placeholder="Masukkan username" required autocomplete="username">
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <label for="password" class="form-label fw-semibold">Password</label>
+                <div class="input-group">
+                    <span class="input-group-text bg-light"><i class="bi bi-lock"></i></span>
+                    <input type="password" class="form-control" id="password" name="password" placeholder="Masukkan password" required autocomplete="current-password">
+                </div>
+            </div>
+
+            <button type="submit" id="btnSubmitLogin" class="btn btn-success w-100 py-3 fw-bold rounded-3 shadow-sm mb-3">
+                <i class="bi bi-box-arrow-in-right me-2"></i> Masuk Sekarang
+            </button>
+        </form>
+    </div>
+</div>
+
+<script>
+async function prosesLogin(event) {
+    event.preventDefault();
+    const btn = document.getElementById('btnSubmitLogin');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Memverifikasi...';
+
+    const formData = new FormData(document.getElementById('formLogin'));
+
+    try {
+        const response = await fetch('/api/login', {
+            method: 'POST',
+            body: formData
+        });
+        const result = await response.json();
+
+        if (result.status === 'success') {
+            // Langsung arahkan ke Dashboard utama ( / )
+            window.location.href = '/';
+        } else {
+            alert(result.message);
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-box-arrow-in-right me-2"></i> Masuk Sekarang';
+        }
+    } catch (e) {
+        alert('Terjadi kesalahan sistem saat login.');
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-box-arrow-in-right me-2"></i> Masuk Sekarang';
+    }
+}
+</script>
+</body>
+</html>
